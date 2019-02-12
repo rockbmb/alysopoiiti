@@ -119,6 +119,7 @@ initTree b@Block {..} =
     in if hash' == hash then Right tree
                         else Left InitInvalidHashError
 
+-- | This datatype is to represent the result of a @QueryState@ command.
 data QuerySt = QuerySt
     { height    :: !Int
     , stHash    :: !Hash
@@ -126,8 +127,12 @@ data QuerySt = QuerySt
     }
   deriving (Eq, Show)
 
--- | Query state command. In order to calculate current height, hash and
--- UTXO of the longest chain.
+-- | Query state command. Returns the current height, hash and UTXO of the
+-- longest chain.
+-- This function's performance may be improved if chain length information
+-- is stored along with each chain, which may require a different data
+-- structure (perhaps a priority search queue where the priority is the
+-- length).
 querySt :: Blocktree -> Either CommandException QuerySt
 querySt m | MS.null m = Left QueryStUninitializedError
           | otherwise =
@@ -150,7 +155,32 @@ querySt m | MS.null m = Left QueryStUninitializedError
     in case chain of
         Genesis Block {..} ->
             Right $ QuerySt 1 hash (concatMap outputs transactions)
+        -- In this pattern match, there is only one block in this chain, but
+        -- it is not a genesis block. That is an error.
         Mainchain (Block {..} NE.:| []) ->
             Left QueryStUninitializedError
         Mainchain (Block {..} NE.:| bs) -> Right $
             QuerySt (1 + length bs) hash (concatMap outputs transactions)
+
+-- | This datatype is to represent the result of a @QueryHead@ command.
+data QueryHd = QueryHd
+    { height    :: !Int
+    , hdHash    :: !Hash
+    }
+  deriving (Eq, Show)
+
+-- | Get a chain's latest hash.
+latestHash :: Blockchain -> Hash
+latestHash (Genesis Block {..}) = hash
+latestHash (Mainchain (Block {..} NE.:| _)) = hash
+
+-- | Query heads command. Returns the current height and hash and UTXO of the
+-- every chain.
+queryHd :: Blocktree -> Either CommandException [QueryHd]
+queryHd m | MS.null m = Left QueryHdUninitializedError
+          | otherwise =
+    let chains :: [Blockchain]
+        chains = M.elems m
+        f :: Blockchain -> QueryHd
+        f x = QueryHd (chainLength x) (latestHash x)
+    in Right . map f . M.elems $ m
