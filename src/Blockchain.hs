@@ -2,19 +2,27 @@
 {-# LANGUAGE RecordWildCards   #-}
 
 module Blockchain
-    ( Command (..)
+    ( Blockchain (..)
+    , Blocktree
+    , Command (..)
     , CommandException (..)
+    , CommandResult
     , OK (..)
+    , QuerySt (..)
+
+    , initTree
+    , querySt
     ) where
 
 import Lib
 
 import Data.Aeson                     (FromJSON (..), ToJSON (..), Value (..),
-                                       encode, object, pairs, withObject,
-                                       withText, (.:), (.=))
+                                       object, pairs, (.=))
 import Data.Aeson.Types               (typeMismatch)
 import qualified Data.HashMap.Strict  as HMS
+import Data.List                      (sortBy)
 import qualified Data.List.NonEmpty   as NE
+import qualified Data.Map.Strict      as MS
 import qualified Data.Text            as T
 
 -- | Datatype to represent the different kinds of commands the client can
@@ -89,28 +97,60 @@ instance ToJSON OK where
 -- to the client.
 type CommandResult = Either CommandException OK
 
--- A blockchain can be @Map Hash Blockchain@, with @Blockchain = NonEmpty Blockchain@.
--- In the map, the hash key is the latest block's hash - allows for fast retrieval of
--- any given fork.
-
 -- | Representation of a single blockchain (no forking).
 data Blockchain
-    = Genesis Block
-    | Mainchain (NE.NonEmpty Block)
+    = Genesis !Block
+    | Mainchain !(NE.NonEmpty Block)
 
-init :: Block -> Either CommandException Blockchain
-init b@Block {..} =
+chainLength :: Blockchain -> Int
+chainLength (Genesis _) = 1
+chainLength (Mainchain (_ NE.:| l)) = 1 + length l
+
+-- A "blocktree" can be @Map Hash Blockchain@, with @Blockchain@ the type
+-- defined above.
+-- In the above map, the key is the latest block's hash - allows for fast
+-- retrieval of any given fork.
+type Blocktree = MS.Map Hash Blockchain
+
+initTree :: Block -> Either CommandException Blocktree
+initTree b@Block {..} =
     let hash' = createHash b
-    in if hash' == hash then Right (Genesis b)
+        tree  = MS.singleton hash (Genesis b)
+    in if hash' == hash then Right tree
                         else Left InitInvalidHashError
 
 data QuerySt = QuerySt
-    { height    :: Int
-    , stHash    :: Hash
-    , stOutputs :: [TxOut]
+    { height    :: !Int
+    , stHash    :: !Hash
+    , stOutputs :: ![TxOut]
     }
   deriving (Eq, Show)
 
-querySt :: Blockchain -> QuerySt
-querySt (Genesis Block {..}) = QuerySt 1 hash (concatMap outputs transactions)
-querySt (Mainchain (Block {..} NE.:| _)) = undefined
+-- | Query state command. In order to calculate current height, hash and
+-- UTXO of the longest chain.
+querySt :: Blocktree -> Either CommandException QuerySt
+querySt m | MS.null m = Left QueryStUninitializedError
+          | otherwise =
+    let hashesAndChains = MS.toList m
+        -- @sorted@ is a list of pairs of blockchains and the hash of their
+        -- latest block, sorted is descension with the following order:
+        -- 1. Compare the blockchains by length, choose the longest
+        -- 2. If the lengths are the same, choose the chain whose latest
+        --    block has the lexicographically greater hash.
+        -- This is the rule used to choose forks.
+        sorted :: [(Hash, Blockchain)]
+        sorted = sortBy (\(h1, chain1) (h2, chain2) ->
+            let res = compare (chainLength chain2) (chainLength chain1)
+            in case res of
+                EQ -> compare h1 h2
+                _  -> res) hashesAndChains
+        -- Because @m@ cannot be empty at this point, and @sortBy@ does not
+        -- alter a list's length, @head@ is safe to use.
+        (_, chain) = head sorted
+    in case chain of
+        Genesis Block {..} ->
+            Right $ QuerySt 1 hash (concatMap outputs transactions)
+        Mainchain (Block {..} NE.:| []) ->
+            Left QueryStUninitializedError
+        Mainchain (Block {..} NE.:| bs) -> Right $
+            QuerySt (1 + length bs) hash (concatMap outputs transactions)

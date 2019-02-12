@@ -85,7 +85,7 @@ instance FromJSON Transaction where
 -- actuall @Block@ datatype implementation.
 -- It's a newtype to avoid using a @ByteString@ that isn't actually a hash
 -- as one.
-newtype Hash = Hash BS.ByteString deriving (Show, Eq)
+newtype Hash = Hash BS.ByteString deriving (Show, Eq, Ord)
 
 instance ToJSON Hash where
     toJSON (Hash bs) = String $ decodeUtf8 bs
