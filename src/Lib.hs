@@ -1,5 +1,5 @@
-{-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
 
 module Lib
     ( Block (..)
@@ -21,11 +21,13 @@ import qualified Crypto.Hash          as C
 import Data.Aeson                     (FromJSON (..), ToJSON (..), Value (..),
                                        encode, object, pairs, withObject,
                                        withText, (.:), (.=))
+import Data.Aeson.Types               (typeMismatch)
 import Data.List                      (sortOn)
 import Data.ByteArray                 (convert)
 import Data.ByteArray.Encoding        (Base (..), convertToBase)
 import qualified Data.ByteString      as BS
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.HashMap.Strict  as HMS
 import qualified Data.Text            as T
 import Data.Text.Encoding             (decodeUtf8, encodeUtf8)
 import GHC.Generics                   (Generic)
@@ -156,3 +158,60 @@ example = Block
 
 exampleJSON :: BSL.ByteString
 exampleJSON = encode example
+
+-- | Datatype to represent the different kinds of commands the client can
+-- receive.
+data Command
+    = Init Block
+    | QueryState
+    | QueryHeads
+    | Submit Block
+
+instance FromJSON Command where
+    parseJSON (Object o) = case HMS.toList o of
+        [("init", block)] -> Init <$> parseJSON block
+        [("query", qType)] -> case qType of
+            String "state" -> pure QueryState
+            String "heads" -> pure QueryHeads
+            t              -> typeMismatch "Command.Query" t
+        [("block", block)] -> Submit <$> parseJSON block
+        l -> fail $ "Could not parse command: " ++ (T.unpack . T.unwords . map fst) l
+    parseJSON invalid    = typeMismatch "Command" invalid
+
+data CommandException
+    = InitInvalidHashError
+    | QueryStUninitializedError
+    | QueryHdUninitializedError
+    | SbmtUninitializedError
+    | SbmtInvalidHashError
+    | SbmtNoPredecessorError
+    | SbmtDuplicateHashError
+    | SbmtInvalidTxError
+
+-- | This instance will be used to output a command's failure to stdout, in
+-- JSON.
+instance ToJSON CommandException where
+    toJSON val = case val of
+        InitInvalidHashError -> f invalidHashTxt
+        QueryStUninitializedError -> f uninitializedTxt
+        QueryHdUninitializedError -> f uninitializedTxt
+        SbmtUninitializedError -> f uninitializedTxt
+        SbmtInvalidHashError -> f invalidHashTxt
+        SbmtNoPredecessorError -> f "no predecessor found"
+        SbmtDuplicateHashError -> f "duplicate hash"
+        SbmtInvalidTxError -> f "invalid transaction"
+      where
+        err = "error"
+        invalidHashTxt = String "invalid hash"
+        uninitializedTxt = String "must initialize first"
+        f txt = object [(err, txt)]
+
+-- | Datatype to represent the client's reply in case of a successful command.
+data OK = OK
+
+instance ToJSON OK where
+    toJSON OK = object [("ok", Null)]
+
+-- | Datatype to represent the result, success or failure, of a command made
+-- to the client.
+type CommandResult = Either CommandException OK
