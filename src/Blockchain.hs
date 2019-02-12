@@ -110,6 +110,10 @@ chainLength (Mainchain (_ NE.:| l)) = 1 + length l
 -- defined above.
 -- In the above map, the key is the latest block's hash - allows for fast
 -- retrieval of any given fork.
+-- This type relies on the assumption that the SHA256 hash function is
+-- injective. In theory it's not (as most random oracles aren't), but in
+-- practice it is since it's unlikely the number of total blocks from every
+-- fork will exceed the square root of the number of possible outputs.
 type Blocktree = MS.Map Hash Blockchain
 
 initTree :: Block -> Either CommandException Blocktree
