@@ -134,6 +134,15 @@ data QuerySt = QuerySt
     }
   deriving (Eq, Show)
 
+instance ToJSON QuerySt where
+    toJSON (QuerySt {..}) = object [ "height" .= stHeight
+                                   , "hash" .= stHash
+                                   , "outputs" .= stOutputs]
+
+    toEncoding (QuerySt {..}) = pairs $  "height" .= stHeight
+                                      <> "hash" .= stHash
+                                      <> "outputs" .= stOutputs
+
 -- | Query state command. Returns the current height, hash and UTXO of the
 -- longest chain.
 -- This function's performance may be improved if chain length information
@@ -169,12 +178,25 @@ querySt m | MS.null m = Left QueryStUninitializedError
         Mainchain (Block {..} NE.:| bs) -> Right $
             QuerySt (1 + length bs) hash (concatMap outputs transactions)
 
--- | This datatype is to represent the result of a @QueryHead@ command.
 data QueryHd = QueryHd
     { hdHeight  :: !Int
     , hdHash    :: !Hash
     }
   deriving (Eq, Show)
+
+instance ToJSON QueryHd where
+  toJSON (QueryHd {..}) = object [ "height" .= hdHeight
+                                 , "hash" .= hdHash]
+
+  toEncoding (QueryHd {..}) = pairs $  "height" .= hdHeight
+                                    <> "hash" .= hdHash
+
+-- | This datatype is to represent the result of a @QueryHead@ command.
+data QueryHds = QueryHds [QueryHd]
+  deriving (Eq, Show)
+
+instance ToJSON QueryHds where
+    toJSON (QueryHds hds) = object ["heads" .= toJSON hds]
 
 -- | Get a chain's latest hash.
 latestHash :: Blockchain -> Hash
@@ -183,12 +205,12 @@ latestHash (Mainchain (Block {..} NE.:| _)) = hash
 
 -- | Query heads command. Returns the current height and hash and UTXO of the
 -- every chain.
-queryHd :: Blocktree -> Either CommandException [QueryHd]
+queryHd :: Blocktree -> Either CommandException QueryHds
 queryHd m | MS.null m = Left QueryHdUninitializedError
           | otherwise =
     let f :: Blockchain -> QueryHd
         f x = QueryHd (chainLength x) (latestHash x)
-    in Right . map f . MS.elems $ m
+    in Right . QueryHds . map f . MS.elems $ m
 
 -- | Checks whether or not a given transaction is valid. Reminder that it is
 -- valid iff the total amount in its inputs sums to the same as the total
