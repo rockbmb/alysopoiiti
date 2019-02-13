@@ -11,7 +11,9 @@ module Blockchain
     , QuerySt (..)
 
     , initTree
+    , queryHd
     , querySt
+    , submitBlock
     ) where
 
 import Lib
@@ -112,8 +114,9 @@ chainLength (Mainchain (_ NE.:| l)) = 1 + length l
 -- retrieval of any given fork.
 -- This type relies on the assumption that the SHA256 hash function is
 -- injective. In theory it's not (as most random oracles aren't), but in
--- practice it is since it's unlikely the number of total blocks from every
--- fork will exceed the square root of the number of possible outputs.
+-- practice it is since it's EXTREMELY unlikely the number of total blocks
+-- from every fork will exceed the square root of the number of possible
+-- outputs.
 type Blocktree = MS.Map Hash Blockchain
 
 initTree :: Block -> Either CommandException Blocktree
@@ -125,7 +128,7 @@ initTree b@Block {..} =
 
 -- | This datatype is to represent the result of a @QueryState@ command.
 data QuerySt = QuerySt
-    { height    :: !Int
+    { stHeight  :: !Int
     , stHash    :: !Hash
     , stOutputs :: ![TxOut]
     }
@@ -168,7 +171,7 @@ querySt m | MS.null m = Left QueryStUninitializedError
 
 -- | This datatype is to represent the result of a @QueryHead@ command.
 data QueryHd = QueryHd
-    { height    :: !Int
+    { hdHeight  :: !Int
     , hdHash    :: !Hash
     }
   deriving (Eq, Show)
@@ -183,8 +186,37 @@ latestHash (Mainchain (Block {..} NE.:| _)) = hash
 queryHd :: Blocktree -> Either CommandException [QueryHd]
 queryHd m | MS.null m = Left QueryHdUninitializedError
           | otherwise =
-    let chains :: [Blockchain]
-        chains = M.elems m
-        f :: Blockchain -> QueryHd
+    let f :: Blockchain -> QueryHd
         f x = QueryHd (chainLength x) (latestHash x)
-    in Right . map f . M.elems $ m
+    in Right . map f . MS.elems $ m
+
+-- | Checks whether or not a given transaction is valid. Reminder that it is
+-- valid iff the total amount in its inputs sums to the same as the total
+-- amount in its outputs.
+isTxValid :: Transaction -> Bool
+isTxValid Tx {..} =
+    (sum . map inAmount) inputs == (sum . map outAmount) outputs
+
+-- | Adds a block to a blocktree. As the other functions above, it uses
+-- @Either CommandException@ to signal possible failure.
+submitBlock :: Block -> Blocktree -> Either CommandException Blocktree
+submitBlock block@(Block {..}) m
+    | MS.null m = Left SbmtUninitializedError
+    | any (not . isTxValid) transactions = Left SbmtInvalidTxError
+    | not (MS.member predecessor m) = Left SbmtNoPredecessorError
+    | MS.member hash m = Left SbmtDuplicateHashError
+    | createHash block /= hash = Left SbmtInvalidHashError
+    | otherwise =
+        let chain  = m MS.! predecessor
+            m'     = MS.delete predecessor m
+            -- This small helper doesn't check the integrity of anything,
+            -- that's done above.
+            cons :: Block -> Blockchain -> Blockchain
+            cons b (Mainchain c) = Mainchain $ NE.cons b c
+            cons b (Genesis b') = Mainchain $ NE.fromList [b, b']
+            chain' = cons block chain
+            m''    = MS.insert hash chain' m'
+        in case chain of
+            Genesis _ -> Right m''
+            Mainchain (_ NE.:| []) -> Left SbmtUninitializedError
+            Mainchain (_ NE.:| _) -> Right m''
