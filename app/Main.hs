@@ -9,22 +9,21 @@ import qualified Data.Aeson                 as A
 import qualified Data.ByteString            as BS
 import qualified Data.ByteString.Lazy       as BSL
 import qualified Data.ByteString.Lazy.Char8 as BSLC
-import qualified Data.Map.Strict            as MS
 
 main :: IO ()
-main = loop mempty
+main = loop (BlockTree mempty mempty)
   where
     output :: A.ToJSON a => a -> IO ()
     output = BSLC.putStrLn . A.encode
 
-    loop :: Blocktree -> IO ()
+    loop :: BlockTree -> IO ()
     loop m = do
         s <- BS.getLine
         case A.eitherDecode (BSL.fromStrict s) of
             Left err -> do putStr err
                            loop m
             Right command -> case command of
-                Init b -> if MS.null m
+                Init b -> if isEmpty m
                     then case initTree b of
                         Left err -> do output err
                                        loop m

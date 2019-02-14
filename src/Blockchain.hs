@@ -3,7 +3,7 @@
 
 module Blockchain
     ( Blockchain (..)
-    , Blocktree
+    , BlockTree (..)
     , Command (..)
     , CommandException (..)
     , CommandResult
@@ -11,6 +11,7 @@ module Blockchain
     , QuerySt (..)
 
     , initTree
+    , isEmpty
     , queryHd
     , querySt
     , submitBlock
@@ -25,6 +26,7 @@ import qualified Data.HashMap.Strict  as HMS
 import Data.List                      (sortBy)
 import qualified Data.List.NonEmpty   as NE
 import qualified Data.Map.Strict      as MS
+import qualified Data.Set             as S
 import qualified Data.Text            as T
 
 -- | Datatype to represent the different kinds of commands the client can
@@ -102,27 +104,47 @@ type CommandResult = Either CommandException OK
 -- | Representation of a single blockchain (no forking). This datatype
 -- assumes that if a chain only has one block, then said block is the genesis
 -- kind. This assumtpion is not verified.
-data Blockchain = Mainchain !(NE.NonEmpty Block)
+data Blockchain = Chain !(NE.NonEmpty Block)
 
 chainLength :: Blockchain -> Int
-chainLength (Mainchain (_ NE.:| l)) = 1 + length l
+chainLength (Chain (_ NE.:| l)) = 1 + length l
 
--- A "blocktree" can be @Map Hash Blockchain@, with @Blockchain@ the type
--- defined above.
+-- A "blocktree" is a datatype that represents:
+-- * A map whose keys are every block that has been accepted in any chain, the
+--   and whose values are the chain that precedes said block.
+-- * A set of hashes of blocks that are currently childless - these are
+-- the heads of all the existing chains.
 -- In the above map, the key is the latest block's hash - allows for fast
 -- retrieval of any given fork.
+--
+-- This is an inefficient way of representing forked chains because in most
+-- cases, there is a lot of sharing - several forks might only differ in the last
+-- few blocks, but each will index the entire chain, effectively duplicating
+-- it.
+--
+-- It's possible to fix this by instead storing every block in a set, have
+-- a map keeping track of which block precedes which, and have the set of
+-- heads remain the same.
+--
 -- This type relies on the assumption that the SHA256 hash function is
 -- injective. In theory it's not (as most random oracles aren't), but in
 -- practice it is since it's EXTREMELY unlikely the number of total blocks
 -- from every fork will exceed the square root of the number of possible
 -- outputs.
-type Blocktree = MS.Map Hash Blockchain
+data BlockTree = BlockTree
+    { heads  :: !(S.Set Hash)
+    , chains :: !(MS.Map Hash Blockchain)
+    }
 
-initTree :: Block -> Either CommandException Blocktree
+isEmpty :: BlockTree -> Bool
+isEmpty BlockTree {..} = MS.null chains
+
+initTree :: Block -> Either CommandException BlockTree
 initTree b@Block {..} =
     let hash' = createHash b
-        tree  = MS.singleton hash (Mainchain $ return b)
-    in if hash' == hash then Right tree
+        heads = S.singleton hash
+        chains = MS.singleton hash (Chain $ return b)
+    in if hash' == hash then Right BlockTree {..}
                         else Left InitInvalidHashError
 
 -- | This datatype is to represent the result of a @QueryState@ command.
@@ -148,10 +170,13 @@ instance ToJSON QuerySt where
 -- is stored along with each chain, which may require a different data
 -- structure (perhaps a priority search queue where the priority is the
 -- length).
-querySt :: Blocktree -> Either CommandException QuerySt
-querySt m | MS.null m = Left QueryStUninitializedError
-          | otherwise =
-    let hashesAndChains = MS.toList m
+querySt :: BlockTree -> Either CommandException QuerySt
+querySt BlockTree {..} | MS.null chains = Left QueryStUninitializedError
+                       | otherwise =
+    let -- Only consider chains that end in a head i.e. a block with no
+        -- children.
+        hashesAndChains :: [(Hash, Blockchain)]
+        hashesAndChains = MS.toList $ MS.restrictKeys chains heads
         -- @sorted@ is a list of pairs of blockchains and the hash of their
         -- latest block, sorted is descension with the following order:
         -- 1. Compare the blockchains by length, choose the longest
@@ -168,7 +193,7 @@ querySt m | MS.null m = Left QueryStUninitializedError
         -- alter a list's length, @head@ is safe to use.
         (_, chain) = head sorted
     in case chain of
-        Mainchain (Block {..} NE.:| bs) -> Right $
+        Chain (Block {..} NE.:| bs) -> Right $
             QuerySt (1 + length bs) hash (concatMap outputs transactions)
 
 data QueryHd = QueryHd
@@ -193,16 +218,18 @@ instance ToJSON QueryHds where
 
 -- | Get a chain's latest hash.
 latestHash :: Blockchain -> Hash
-latestHash (Mainchain (Block {..} NE.:| _)) = hash
+latestHash (Chain (Block {..} NE.:| _)) = hash
 
 -- | Query heads command. Returns the current height and hash and UTXO of the
 -- every chain.
-queryHd :: Blocktree -> Either CommandException QueryHds
-queryHd m | MS.null m = Left QueryHdUninitializedError
-          | otherwise =
+queryHd :: BlockTree -> Either CommandException QueryHds
+queryHd BlockTree {..} | MS.null chains = Left QueryHdUninitializedError
+                       | otherwise =
     let f :: Blockchain -> QueryHd
         f x = QueryHd (chainLength x) (latestHash x)
-    in Right . QueryHds . map f . MS.elems $ m
+       -- The only chains that are going to matter for this command are those
+       -- that end in childless blocks (heads).
+    in Right . QueryHds . fmap (f . (chains MS.!)) . S.toList $ heads
 
 -- | Checks whether or not a given transaction is valid. Reminder that it is
 -- valid iff the total amount in its inputs sums to the same as the total
@@ -213,30 +240,24 @@ isTxValid Tx {..} =
 
 -- | Adds a block to a blocktree. As the other functions above, it uses
 -- @Either CommandException@ to signal possible failure.
-submitBlock :: Block -> Blocktree -> Either CommandException Blocktree
-submitBlock block@(Block {..}) m
-    | MS.null m = Left SbmtUninitializedError
-    | MS.member hash m = Left SbmtDuplicateHashError
+submitBlock :: Block -> BlockTree -> Either CommandException BlockTree
+submitBlock block@(Block {..}) BlockTree {..}
+    | MS.null chains = Left SbmtUninitializedError
+    | MS.member hash chains = Left SbmtDuplicateHashError
     | any (not . isTxValid) transactions = Left SbmtInvalidTxError
-    | not (MS.member predecessor m) = Left SbmtNoPredecessorError
+    | not (MS.member predecessor chains) = Left SbmtNoPredecessorError
     | createHash block /= hash = Left SbmtInvalidHashError
     | otherwise =
-        let chain  = m MS.! predecessor
-            m'     = MS.delete predecessor m
+        let chain  = chains MS.! predecessor
+            heads' = S.insert hash $ S.delete predecessor heads
             -- This small helper doesn't check the integrity of anything,
             -- that's done above.
             cons :: Block -> Blockchain -> Blockchain
-            cons b (Mainchain c) = Mainchain $ NE.cons b c
+            cons b (Chain c) = Chain $ NE.cons b c
             chain' = cons block chain
-            m''    = MS.insert hash chain' m'
-        in case chain of
-            Mainchain (_ NE.:| []) -> Left SbmtUninitializedError
-            Mainchain (_ NE.:| _) -> Right m''
+            m''    = BlockTree heads' $ MS.insert hash chain' chains
+        in Right m''
 
--- THERE MAY BE SOME ERRORS REGARDING THE HASH INSERTED AS A CHAIN'S KEY INTO
--- @BLOCKTREE@.
-
--- ALSO, DO NOT FORGET TO REFACTOR:
--- * BLOCKCHAIN TYPE (GENESIS IS USELESS)
+-- DO NOT FORGET TO REFACTOR:
 -- * MAIN (USE AN IOREF FOR THE BLOCKTREE?)
 -- * COMMAND HANDLING IN MAIN (AGAIN) (TOO MUCH BOILERPLATE)
