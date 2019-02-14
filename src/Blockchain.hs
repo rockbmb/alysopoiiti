@@ -99,13 +99,12 @@ instance ToJSON OK where
 -- to the client.
 type CommandResult = Either CommandException OK
 
--- | Representation of a single blockchain (no forking).
-data Blockchain
-    = Genesis !Block
-    | Mainchain !(NE.NonEmpty Block)
+-- | Representation of a single blockchain (no forking). This datatype
+-- assumes that if a chain only has one block, then said block is the genesis
+-- kind. This assumtpion is not verified.
+data Blockchain = Mainchain !(NE.NonEmpty Block)
 
 chainLength :: Blockchain -> Int
-chainLength (Genesis _) = 1
 chainLength (Mainchain (_ NE.:| l)) = 1 + length l
 
 -- A "blocktree" can be @Map Hash Blockchain@, with @Blockchain@ the type
@@ -122,7 +121,7 @@ type Blocktree = MS.Map Hash Blockchain
 initTree :: Block -> Either CommandException Blocktree
 initTree b@Block {..} =
     let hash' = createHash b
-        tree  = MS.singleton hash (Genesis b)
+        tree  = MS.singleton hash (Mainchain $ return b)
     in if hash' == hash then Right tree
                         else Left InitInvalidHashError
 
@@ -169,12 +168,6 @@ querySt m | MS.null m = Left QueryStUninitializedError
         -- alter a list's length, @head@ is safe to use.
         (_, chain) = head sorted
     in case chain of
-        Genesis Block {..} ->
-            Right $ QuerySt 1 hash (concatMap outputs transactions)
-        -- In this pattern match, there is only one block in this chain, but
-        -- it is not a genesis block. That is an error.
-        Mainchain (Block {..} NE.:| []) ->
-            Left QueryStUninitializedError
         Mainchain (Block {..} NE.:| bs) -> Right $
             QuerySt (1 + length bs) hash (concatMap outputs transactions)
 
@@ -200,7 +193,6 @@ instance ToJSON QueryHds where
 
 -- | Get a chain's latest hash.
 latestHash :: Blockchain -> Hash
-latestHash (Genesis Block {..}) = hash
 latestHash (Mainchain (Block {..} NE.:| _)) = hash
 
 -- | Query heads command. Returns the current height and hash and UTXO of the
@@ -224,9 +216,9 @@ isTxValid Tx {..} =
 submitBlock :: Block -> Blocktree -> Either CommandException Blocktree
 submitBlock block@(Block {..}) m
     | MS.null m = Left SbmtUninitializedError
+    | MS.member hash m = Left SbmtDuplicateHashError
     | any (not . isTxValid) transactions = Left SbmtInvalidTxError
     | not (MS.member predecessor m) = Left SbmtNoPredecessorError
-    | MS.member hash m = Left SbmtDuplicateHashError
     | createHash block /= hash = Left SbmtInvalidHashError
     | otherwise =
         let chain  = m MS.! predecessor
@@ -235,10 +227,16 @@ submitBlock block@(Block {..}) m
             -- that's done above.
             cons :: Block -> Blockchain -> Blockchain
             cons b (Mainchain c) = Mainchain $ NE.cons b c
-            cons b (Genesis b') = Mainchain $ NE.fromList [b, b']
             chain' = cons block chain
             m''    = MS.insert hash chain' m'
         in case chain of
-            Genesis _ -> Right m''
             Mainchain (_ NE.:| []) -> Left SbmtUninitializedError
             Mainchain (_ NE.:| _) -> Right m''
+
+-- THERE MAY BE SOME ERRORS REGARDING THE HASH INSERTED AS A CHAIN'S KEY INTO
+-- @BLOCKTREE@.
+
+-- ALSO, DO NOT FORGET TO REFACTOR:
+-- * BLOCKCHAIN TYPE (GENESIS IS USELESS)
+-- * MAIN (USE AN IOREF FOR THE BLOCKTREE?)
+-- * COMMAND HANDLING IN MAIN (AGAIN) (TOO MUCH BOILERPLATE)
