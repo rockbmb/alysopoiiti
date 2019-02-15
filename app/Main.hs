@@ -22,7 +22,7 @@ main = loop
     -- Note that @IORef@s are, for the most part, NOT thread-safe.
     ref :: IORef BlockTree
     {-# NOINLINE ref #-}
-    ref = unsafePerformIO $ newIORef $ BlockTree mempty mempty
+    ref = unsafePerformIO $ newIORef $ emptyTree
 
     output :: A.ToJSON a => a -> IO ()
     output = BSLC.putStrLn . A.encode
@@ -69,10 +69,7 @@ main = loop
             Right command -> do
                 blocktree <- readIORef ref
                 case command of
-                    Init b -> if isEmpty blocktree
-                        then handleResult (initTree b) OK
-                        else do BSLC.putStrLn "Chain has already been initialized"
-                                loop
+                    Init b -> handleResult (initChain b blocktree) OK
                     QueryState -> handleResult' (querySt blocktree)
                     QueryHeads -> handleResult' (queryHd blocktree)
                     Submit b -> handleResult (submitBlock b blocktree) OK
