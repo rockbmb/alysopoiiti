@@ -124,7 +124,10 @@ chainLength (Chain (_ NE.:| l)) = 1 + length l
 --
 -- It's possible to fix this by instead storing every block in a set, have
 -- a map keeping track of which block precedes which, and have the set of
--- heads remain the same.
+-- heads remain the same. The main tradeoff of this approach compared to the
+-- current one is that everytime a certain chain is needed, it has to be
+-- reconstructed, whereas now, although space complexity is poor, any chain
+-- is available on demand.
 --
 -- This type relies on the assumption that the SHA256 hash function is
 -- injective. In theory it's not (as most random oracles aren't), but in
