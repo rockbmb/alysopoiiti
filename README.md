@@ -1,4 +1,4 @@
-# cryptium
+# alysopoiiti
 
 To run, execute the following command at a terminal: `stack run`. Input one
 JSON-encoded command per line (as mentioned in the specification). Failure to

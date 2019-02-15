@@ -1,0 +1,74 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.31.1.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 4e479eb2bba0e265c5ef2768623a4087a6c84ea78758b80418a3ce712fa38843
+
+name:           alysopoiiti
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/githubuser/alysopoiiti#readme>
+homepage:       https://github.com/githubuser/alysopoiiti#readme
+bug-reports:    https://github.com/githubuser/alysopoiiti/issues
+author:         Alexandre Rodrigues Baldé <alexandrer_b@outlook.com>
+maintainer:     Alexandre Rodrigues Baldé <alexandrer_b@outlook.com>
+copyright:      2019 Alexandre Rodrigues Baldé
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    ChangeLog.md
+
+library
+  exposed-modules:
+      Blockchain,
+      Lib
+  other-modules:
+      Paths_alysopoiiti
+  hs-source-dirs:
+      src
+  build-depends:
+      base >=4.7 && <5,
+      aeson,
+      bytestring,
+      containers,
+      cryptonite,
+      memory,
+      text,
+      unordered-containers
+  default-language: Haskell2010
+  ghc-options: -Wall
+
+executable alysopoiiti-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_alysopoiiti
+  hs-source-dirs:
+      app
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    aeson
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , alysopoiiti
+  default-language: Haskell2010
+  ghc-options: -Wall
+
+test-suite alysopoiiti-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_alysopoiiti
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    aeson
+    , base >=4.7 && <5
+    , alysopoiiti
+    , hspec
+  default-language: Haskell2010
+  ghc-options: -Wall

@@ -1,3 +1,3 @@
-# Changelog for cryptium
+# Changelog for alysopoiiti
 
 ## Unreleased changes
